@@ -26,7 +26,7 @@
 
 
 // Configuration
-#include "config.hpp"
+#include "vmime/config.hpp"
 
 // Base definitions
 #include "base.hpp"
@@ -85,6 +85,7 @@
 #include "utility/outputStreamByteArrayAdapter.hpp"
 #include "utility/outputStreamSocketAdapter.hpp"
 #include "utility/outputStreamStringAdapter.hpp"
+#include "utility/prefixedInputStream.hpp"
 #include "utility/streamUtils.hpp"
 
 // Message builder/parser

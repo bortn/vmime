@@ -62,7 +62,7 @@ encoding::encoding(const encoding& enc)
 
 
 void encoding::parseImpl(
-	const parsingContext& /* ctx */,
+	parsingContext& /* ctx */,
 	const string& buffer,
 	const size_t position,
 	const size_t end,
@@ -157,9 +157,7 @@ const encoding encoding::decideImpl(
 
 	const string::difference_type length = end - begin;
 	const string::difference_type count = std::count_if(
-		begin, end,
-		std::bind2nd(std::less<unsigned char>(), 127)
-	);
+		begin, end, [](unsigned char x) { return x <= 127; });
 
 	// All is in 7-bit US-ASCII --> 7-bit (or Quoted-Printable...)
 	if (length == count) {

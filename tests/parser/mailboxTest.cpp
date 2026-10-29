@@ -32,6 +32,8 @@ VMIME_TEST_SUITE_BEGIN(mailboxTest)
 		VMIME_TEST(testSeparatorInComment)
 		VMIME_TEST(testMalformations)
 		VMIME_TEST(testExcessiveQuoting)
+		VMIME_TEST(testSpacing)
+		VMIME_TEST(testInternationalizedEmail)
 	VMIME_TEST_LIST_END
 
 
@@ -182,6 +184,44 @@ VMIME_TEST_SUITE_BEGIN(mailboxTest)
 
 		a = make_shared<mailbox>(text(word("Foo B@r", charsets::UTF_8)), e);
 		VASSERT_EQ("generate", "=?utf-8?Q?Foo_B=40r?= <a@b.com>", a->generate());
+	}
+
+	void testSpacing() {
+
+		vmime::text t("Foo B\xc3\xa4renstark Baz", vmime::charsets::UTF_8);
+		vmime::mailbox m(t, "a@b.de");
+		VASSERT_EQ("1", "Foo =?utf-8?Q?B=C3=A4renstark?= Baz", t.generate());
+		VASSERT_EQ("2", "=?us-ascii?Q?Foo?= =?utf-8?Q?_B=C3=A4renstark?= =?us-ascii?Q?_Baz?= <a@b.de>", m.generate());
+
+	}
+
+	void testInternationalizedEmail() {
+
+		vmime::parsingContext pctx;
+		pctx.setInternationalizedEmailSupport(true);
+
+		// ASCII-only display names should not become encoded-words
+		vmime::mailbox m;
+		m.parse(pctx, "\"John Doe\" <john.doe@acme.com>");
+		VASSERT_EQ("1", "\"John Doe\" <john.doe@acme.com>", m.generate());
+
+		m.parse(pctx, "\"J\xc3\xa4ger\" <vincent@vmime.org>");
+		VASSERT_EQ("2", "=?utf-8?Q?J=C3=A4ger?= <vincent@vmime.org>", m.generate());
+
+		vmime::generationContext gctx;
+		gctx.setInternationalizedEmailSupport(true);
+		std::ostringstream oss;
+		vmime::utility::outputStreamAdapter os(oss);
+		m.generate(gctx, os);
+		VASSERT_EQ("3", "\"J\xc3\xa4ger\" <vincent@vmime.org>", oss.str());
+	}
+
+	void testAPI() {
+
+		auto take_string_directly = [](vmime::string &&) {};
+		vmime::mailbox m;
+		take_string_directly(m.generate());
+
 	}
 
 VMIME_TEST_SUITE_END

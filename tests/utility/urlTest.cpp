@@ -35,6 +35,8 @@ VMIME_TEST_SUITE_BEGIN(urlTest)
 		VMIME_TEST(testParse3)
 		VMIME_TEST(testParse4)
 		VMIME_TEST(testParse5)
+		VMIME_TEST(testParseIPv6Full)
+		VMIME_TEST(testParseIPv6NoPort)
 		VMIME_TEST(testGenerate)
 		VMIME_TEST(testUtilsEncode)
 		VMIME_TEST(testUtilsDecode)
@@ -70,7 +72,7 @@ VMIME_TEST_SUITE_BEGIN(urlTest)
 		VASSERT_EQ("1.4", "password", u1.getPassword());
 		VASSERT_EQ("1.5", "host", u1.getHost());
 		VASSERT_EQ("1.6", 12345, u1.getPort());
-		VASSERT_EQ("1.7", "/path/", u1.getPath());
+		VASSERT_EQ("1.7", "path/", u1.getPath());
 
 		vmime::utility::url u2("", "");
 
@@ -80,7 +82,7 @@ VMIME_TEST_SUITE_BEGIN(urlTest)
 		VASSERT_EQ("2.4", "", u2.getPassword());
 		VASSERT_EQ("2.5", "host", u2.getHost());
 		VASSERT_EQ("2.6", 12345, u2.getPort());
-		VASSERT_EQ("2.7", "/path/", u2.getPath());
+		VASSERT_EQ("2.7", "path/", u2.getPath());
 
 		vmime::utility::url u3("", "");
 
@@ -90,7 +92,7 @@ VMIME_TEST_SUITE_BEGIN(urlTest)
 		VASSERT_EQ("3.4", "", u3.getPassword());
 		VASSERT_EQ("3.5", "host", u3.getHost());
 		VASSERT_EQ("3.6", 12345, u3.getPort());
-		VASSERT_EQ("3.7", "/path/", u3.getPath());
+		VASSERT_EQ("3.7", "path/", u3.getPath());
 
 		vmime::utility::url u4("", "");
 
@@ -100,7 +102,7 @@ VMIME_TEST_SUITE_BEGIN(urlTest)
 		VASSERT_EQ("4.4", "", u4.getPassword());
 		VASSERT_EQ("4.5", "host", u4.getHost());
 		VASSERT_EQ("4.6", vmime::utility::url::UNSPECIFIED_PORT, u4.getPort());
-		VASSERT_EQ("4.7", "/path/", u4.getPath());
+		VASSERT_EQ("4.7", "path/", u4.getPath());
 
 		vmime::utility::url u5("", "");
 
@@ -120,7 +122,7 @@ VMIME_TEST_SUITE_BEGIN(urlTest)
 		VASSERT_EQ("6.4", "", u4.getPassword());
 		VASSERT_EQ("6.5", "host", u4.getHost());
 		VASSERT_EQ("6.6", vmime::utility::url::UNSPECIFIED_PORT, u4.getPort());
-		VASSERT_EQ("6.7", "/path/file", u4.getPath());
+		VASSERT_EQ("6.7", "path/file", u4.getPath());
 	}
 
 	void testParse2() {
@@ -155,7 +157,7 @@ VMIME_TEST_SUITE_BEGIN(urlTest)
 		VASSERT_EQ("1.4", "pass\x56word", u1.getPassword());
 		VASSERT_EQ("1.5", "ho\x78st", u1.getHost());
 		VASSERT_EQ("1.6", 12345, u1.getPort());
-		VASSERT_EQ("1.7", "/pa\xabth/", u1.getPath());
+		VASSERT_EQ("1.7", "pa\xabth/", u1.getPath());
 	}
 
 	void testParse4() {
@@ -166,14 +168,14 @@ VMIME_TEST_SUITE_BEGIN(urlTest)
 		VASSERT_EQ("1.1", true, parseHelper(u1, "proto://host/path?p1=v1&p2=v2"));
 		VASSERT_EQ("1.2", "v1", u1.getParams()["p1"]);
 		VASSERT_EQ("1.3", "v2", u1.getParams()["p2"]);
-		VASSERT_EQ("1.4", "/path", u1.getPath());
+		VASSERT_EQ("1.4", "path", u1.getPath());
 
 		vmime::utility::url u2("", "");
 
 		VASSERT_EQ("2.1", true, parseHelper(u2, "proto://host/path?p1=v1&p2"));
 		VASSERT_EQ("2.2", "v1", u2.getParams()["p1"]);
 		VASSERT_EQ("2.3", "p2", u2.getParams()["p2"]);
-		VASSERT_EQ("2.4", "/path", u2.getPath());
+		VASSERT_EQ("2.4", "path", u2.getPath());
 
 		vmime::utility::url u3("", "");
 
@@ -187,7 +189,7 @@ VMIME_TEST_SUITE_BEGIN(urlTest)
 		VASSERT_EQ("4.1", true, parseHelper(u4, "proto://host/path?p1=%3D&%3D=v2"));
 		VASSERT_EQ("4.2", "=", u4.getParams()["p1"]);
 		VASSERT_EQ("4.3", "v2", u4.getParams()["="]);
-		VASSERT_EQ("4.4", "/path", u4.getPath());
+		VASSERT_EQ("4.4", "path", u4.getPath());
 	}
 
 	// '@' symbol in the username part
@@ -199,6 +201,26 @@ VMIME_TEST_SUITE_BEGIN(urlTest)
 		VASSERT_EQ("2", "account@myserver.com", u1.getUsername());
 		VASSERT_EQ("3", "password", u1.getPassword());
 		VASSERT_EQ("4", "myserver.com", u1.getHost());
+	}
+
+	void testParseIPv6Full() {
+
+		vmime::utility::url u1("", "");
+
+		VASSERT_EQ("1", true, parseHelper(u1, "http://a:b@[::1]:80/p"));
+		VASSERT_EQ("2", "a", u1.getUsername());
+		VASSERT_EQ("3", "b", u1.getPassword());
+		VASSERT_EQ("4", "::1", u1.getHost());
+		VASSERT_EQ("5", 80, u1.getPort());
+		VASSERT_EQ("6", "p", u1.getPath());
+	}
+
+	void testParseIPv6NoPort() {
+
+		vmime::utility::url u1("", "");
+
+		VASSERT_EQ("1", true, parseHelper(u1, "http://[::1]/"));
+		VASSERT_EQ("2", "::1", u1.getHost());
 	}
 
 	void testGenerate() {
@@ -234,6 +256,13 @@ VMIME_TEST_SUITE_BEGIN(urlTest)
 			"3.3",
 			"proto://host/?%26=%3D",
 			static_cast <vmime::string>(u3)
+		);
+
+		vmime::utility::url u5("http", "::1", 80, "p");
+		VASSERT_EQ(
+			"4",
+			"http://[::1]:80/p",
+			static_cast <vmime::string>(u5)
 		);
 	}
 

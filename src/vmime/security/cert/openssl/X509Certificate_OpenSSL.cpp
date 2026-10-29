@@ -433,6 +433,14 @@ bool X509Certificate_OpenSSL::verifyHostName(
 	std::vector <std::string>* nonMatchingNames
 ) const {
 
+	// An IP address must match an IP address in subject alternative names
+	// (X509_check_ip_asc() returns -2 if hostname is not an IP address)
+	const int ipMatch = X509_check_ip_asc(m_data->cert, hostname.c_str(), 0);
+
+	if (ipMatch != -2) {
+		return ipMatch == 1;
+	}
+
 	// First, check subject common name against hostname
 	char CNBuffer[1024];
 	CNBuffer[sizeof(CNBuffer) - 1] = '\0';
@@ -468,7 +476,7 @@ bool X509Certificate_OpenSSL::verifyHostName(
 		if (currentName->type == GEN_DNS) {
 
 			// Current name is a DNS name, let's check it
-			char *DNSName = (char *) ASN1_STRING_data(currentName->d.dNSName);
+			const char *DNSName = (const char *) ASN1_STRING_get0_data(currentName->d.dNSName);
 
 			// Make sure there isn't an embedded NUL character in the DNS name
 			if (ASN1_STRING_length(currentName->d.dNSName) != strlen(DNSName)) {

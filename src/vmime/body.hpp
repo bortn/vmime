@@ -307,6 +307,7 @@ private:
 
 	string m_prologText;
 	string m_epilogText;
+	string m_boundary;
 
 	shared_ptr <const contentHandler> m_contents;
 
@@ -343,7 +344,7 @@ protected:
 
 	// Component parsing & assembling
 	void parseImpl(
-		const parsingContext& ctx,
+		parsingContext& ctx,
 		const shared_ptr <utility::parserInputStreamAdapter>& parser,
 		const size_t position,
 		const size_t end,

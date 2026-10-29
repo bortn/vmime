@@ -38,7 +38,6 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <sys/types.h>
-#include <sys/time.h>
 #include <netinet/in.h>
 #include <netdb.h>
 #include <fcntl.h>
@@ -46,6 +45,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <poll.h>
+#include <pthread.h>
+
+#include <chrono>
 
 #include "vmime/utility/stringUtils.hpp"
 
@@ -64,14 +66,20 @@
 
 namespace {
 
-char* vmime_strerror_r_result(int /* res */, char* buf) {
+#ifdef __GNUC__
+#	define GNU_UNUSED [[gnu::unused]]
+#else
+#	define GNU_UNUSED
+#endif
+
+GNU_UNUSED char* vmime_strerror_r_result(int /* res */, char* buf) {
 
 	// XSI-compliant prototype:
 	// int strerror_r(int errnum, char *buf, size_t buflen);
 	return buf;
 }
 
-char* vmime_strerror_r_result(char* res, char* /* buf */) {
+GNU_UNUSED char* vmime_strerror_r_result(char* res, char* /* buf */) {
 
 	// GNU-specific prototype:
 	// char *strerror_r(int errnum, char *buf, size_t buflen);
@@ -81,6 +89,116 @@ char* vmime_strerror_r_result(char* res, char* /* buf */) {
 }
 
 #endif // VMIME_HAVE_STRERROR_R
+
+
+#if VMIME_HAVE_GETADDRINFO_A
+
+namespace {
+
+// Asynchronous name resolution request. glibc keeps using it as long as the
+// request is being processed, possibly after posixSocket::resolve() has
+// returned (eg. on timeout), so it holds everything the request refers to.
+struct gaiRequestContext {
+
+	gaiRequestContext(
+		const vmime::string& address,
+		const char* service,
+		const struct ::addrinfo& hints
+	)
+		: address(address),
+		  service(service),
+		  hints(hints),
+		  next(NULL) {
+
+		memset(&request, 0, sizeof(request));
+
+		request.ar_name = this->address.c_str();
+		request.ar_service = this->service.c_str();
+		request.ar_request = &this->hints;
+	}
+
+	vmime::string address;
+	vmime::string service;
+	struct ::addrinfo hints;
+	struct ::gaicb request;
+
+	gaiRequestContext* next;  // in list of pending requests
+};
+
+
+// Requests which were still being processed when they were released;
+// they are deleted later, once completed
+pthread_mutex_t g_pendingRequestsMutex = PTHREAD_MUTEX_INITIALIZER;
+gaiRequestContext* g_pendingRequests = NULL;
+
+
+// Delete a request, unless it is still being processed by glibc.
+// Returns false in this case.
+bool tryDeleteRequest(gaiRequestContext* ctx) {
+
+	switch (gai_cancel(&ctx->request)) {
+
+		case EAI_CANCELED:  // was not processed yet; removed from the queue
+		case EAI_ALLDONE:  // completed
+
+			if (ctx->request.ar_result) {
+				freeaddrinfo(ctx->request.ar_result);
+			}
+
+			delete ctx;
+			return true;
+
+		default:  // EAI_NOTCANCELED
+
+			return false;
+	}
+}
+
+
+// Delete pending requests which have been completed in the meantime
+void deletePendingRequests() {
+
+	pthread_mutex_lock(&g_pendingRequestsMutex);
+
+	gaiRequestContext** link = &g_pendingRequests;
+
+	while (*link) {
+
+		gaiRequestContext* ctx = *link;
+		gaiRequestContext* next = ctx->next;
+
+		if (tryDeleteRequest(ctx)) {
+			*link = next;
+		} else {
+			link = &ctx->next;
+		}
+	}
+
+	pthread_mutex_unlock(&g_pendingRequestsMutex);
+}
+
+
+// Delete a request, or defer deletion if it is still being processed
+struct gaiRequestDeleter {
+
+	void operator()(gaiRequestContext* ctx) const {
+
+		if (tryDeleteRequest(ctx)) {
+			return;
+		}
+
+		pthread_mutex_lock(&g_pendingRequestsMutex);
+
+		ctx->next = g_pendingRequests;
+		g_pendingRequests = ctx;
+
+		pthread_mutex_unlock(&g_pendingRequestsMutex);
+	}
+};
+
+}
+
+#endif // VMIME_HAVE_GETADDRINFO_A
 
 
 
@@ -212,8 +330,7 @@ void posixSocket::connect(const vmime::string& address, const vmime::port_t port
 				const int pollTimeout = 1000;   // poll() timeout (ms)
 				const int tryNextTimeout = 5000;  // maximum time before trying next (ms)
 
-				timeval startTime = { 0, 0 };
-				gettimeofday(&startTime, /* timezone */ NULL);
+				const auto startTime = std::chrono::steady_clock::now();
 
 				do {
 
@@ -248,7 +365,7 @@ void posixSocket::connect(const vmime::string& address, const vmime::port_t port
 						break;
 
 					// Error
-					} else if (ret < -1) {
+					} else if (ret < 0) {
 
 						if (errno != EAGAIN && errno != EINTR) {
 
@@ -278,11 +395,10 @@ void posixSocket::connect(const vmime::string& address, const vmime::port_t port
 						// Keep waiting for connection
 					}
 
-					timeval curTime = { 0, 0 };
-					gettimeofday(&curTime, /* timezone */ NULL);
+					const auto elapsedTime = std::chrono::steady_clock::now() - startTime;
 
 					if (curAddrInfo->ai_next != NULL &&
-						curTime.tv_usec - startTime.tv_usec >= tryNextTimeout * 1000) {
+					    elapsedTime >= std::chrono::milliseconds(tryNextTimeout)) {
 
 						connectErrno = ETIMEDOUT;
 						break;
@@ -404,7 +520,7 @@ void posixSocket::resolve(
 	memset(&hints, 0, sizeof(hints));
 
 	hints.ai_flags = AI_CANONNAME | AI_NUMERICSERV;
-	hints.ai_family = PF_UNSPEC;
+	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
 
 #if VMIME_HAVE_GETADDRINFO_A
@@ -412,14 +528,14 @@ void posixSocket::resolve(
 	// If getaddrinfo_a() is available, use asynchronous resolving to allow
 	// the timeout handler to cancel the operation
 
-	struct ::gaicb gaiRequest;
-	memset(&gaiRequest, 0, sizeof(gaiRequest));
+	deletePendingRequests();
 
-	gaiRequest.ar_name = address.c_str();
-	gaiRequest.ar_service = portStr;
-	gaiRequest.ar_request = &hints;
+	// If we give up while the request is being processed (eg. timeout),
+	// it cannot be cancelled: its deletion is deferred until it completes
+	std::unique_ptr <gaiRequestContext, gaiRequestDeleter> ctx
+		(new gaiRequestContext(address, portStr, hints));
 
-	struct ::gaicb* gaiRequests = &gaiRequest;
+	struct ::gaicb* gaiRequests = &ctx->request;
 	int gaiError;
 
 	if ((gaiError = getaddrinfo_a(GAI_NOWAIT, &gaiRequests, 1, NULL)) != 0) {
@@ -443,7 +559,7 @@ void posixSocket::resolve(
 
 		if (gaiError == 0 || gaiError == EAI_ALLDONE) {
 
-			const int ret = gai_error(&gaiRequest);
+			const int ret = gai_error(&ctx->request);
 
 			if (ret != 0) {
 
@@ -453,15 +569,18 @@ void posixSocket::resolve(
 
 			} else {
 
-				*addrInfo = gaiRequest.ar_result;
+				// Take ownership of the result
+				*addrInfo = ctx->request.ar_result;
+				ctx->request.ar_result = NULL;
+
 				break;
 			}
 
-		} else if (gaiError != EAI_AGAIN) {
+		} else if (gaiError != EAI_AGAIN && gaiError != EAI_INTR) {
 
 			if (gaiError == EAI_SYSTEM) {
 
-				const int ret = gai_error(&gaiRequest);
+				const int ret = gai_error(&ctx->request);
 
 				if (ret != EAI_INPROGRESS && errno != 0) {
 
@@ -536,49 +655,28 @@ void posixSocket::disconnect() {
 }
 
 
-static bool isNumericAddress(const char* address) {
-
-#if VMIME_HAVE_GETADDRINFO
-
-	struct addrinfo hint, *info = NULL;
-	memset(&hint, 0, sizeof(hint));
-
-	hint.ai_family = AF_UNSPEC;
-	hint.ai_flags = AI_NUMERICHOST;
-
-	if (getaddrinfo(address, 0, &hint, &info) == 0) {
-
-		freeaddrinfo(info);
-		return true;
-
-	} else {
-
-		return false;
-	}
-
-#else
-
-	return inet_addr(address) != INADDR_NONE;
-
-#endif
-
-}
-
-
 const string posixSocket::getPeerAddress() const {
 
 	// Get address of connected peer
-	sockaddr peer;
+	sockaddr_storage peer;
 	socklen_t peerLen = sizeof(peer);
 
-	if (getpeername(m_desc, &peer, &peerLen) != 0) {
+	if (getpeername(m_desc, reinterpret_cast <sockaddr*>(&peer), &peerLen) != 0) {
 		throwSocketError(errno);
 	}
 
 	// Convert to numerical presentation format
+	const void* addr;
+
+	if (peer.ss_family == AF_INET6) {
+		addr = &reinterpret_cast <sockaddr_in6*>(&peer)->sin6_addr;
+	} else {
+		addr = &reinterpret_cast <sockaddr_in*>(&peer)->sin_addr;
+	}
+
 	char buf[INET6_ADDRSTRLEN];
 
-	if (!inet_ntop(peer.sa_family, &(reinterpret_cast <struct sockaddr_in *>(&peer))->sin_addr, buf, sizeof(buf))) {
+	if (!inet_ntop(peer.ss_family, addr, buf, sizeof(buf))) {
 		throwSocketError(errno);
 	}
 
@@ -588,44 +686,9 @@ const string posixSocket::getPeerAddress() const {
 
 const string posixSocket::getPeerName() const {
 
-	// Get address of connected peer
-	sockaddr peer;
-	socklen_t peerLen = sizeof(peer);
-
-	if (getpeername(m_desc, &peer, &peerLen) != 0) {
-		throwSocketError(errno);
-	}
-
-	// If server address as specified when connecting is a numeric
-	// address, try to get a host name for it
-	if (isNumericAddress(m_serverAddress.c_str())) {
-
-#if VMIME_HAVE_GETNAMEINFO
-
-		char host[NI_MAXHOST + 1];
-		char service[NI_MAXSERV + 1];
-
-		if (getnameinfo(reinterpret_cast <sockaddr *>(&peer), peerLen,
-				host, sizeof(host), service, sizeof(service),
-				/* flags */ NI_NAMEREQD) == 0) {
-
-			return string(host);
-		}
-
-#else
-
-		struct hostent *hp;
-
-		if ((hp = gethostbyaddr(reinterpret_cast <const void *>(&peer),
-				sizeof(peer), peer.sa_family)) != NULL) {
-
-			return string(hp->h_name);
-		}
-
-#endif
-
-	}
-
+	// Do not try to get a host name for a numeric address: the peer name is
+	// used as the TLS reference identity, and it must not be derived from an
+	// insecure source such as a reverse DNS lookup
 	return m_serverAddress;
 }
 

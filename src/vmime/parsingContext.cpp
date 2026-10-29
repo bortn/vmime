@@ -35,14 +35,15 @@ parsingContext::parsingContext()
 
 parsingContext::parsingContext(const parsingContext& ctx)
 	: context(ctx),
-	  m_headerParseErrorRecovery(vmime::headerParseRecoveryMethod::SKIP_LINE) {
+	  m_headerParseErrorRecovery(vmime::headerParseRecoveryMethod::SKIP_LINE),
+	  m_maxNestingDepth(ctx.m_maxNestingDepth) {
 
 }
 
 
 parsingContext& parsingContext::getDefaultContext() {
 
-	static parsingContext ctx;
+	static thread_local parsingContext ctx;
 	return ctx;
 }
 
@@ -58,6 +59,42 @@ void parsingContext::setHeaderParseErrorRecoveryMethod(
 ) {
 
 	m_headerParseErrorRecovery = recoveryMethod;
+}
+
+
+bool parsingContext::getHeaderRecoveryNeeded() const {
+
+	return m_headerParseRecoveryNeeded;
+}
+
+
+void parsingContext::setHeaderRecoveryNeeded(bool needed) {
+
+	m_headerParseRecoveryNeeded = needed;
+}
+
+
+bool parsingContext::getUseMyHostname() const {
+
+	return m_useMyHostname;
+}
+
+
+void parsingContext::setUseMyHostname(bool useMyHostname) {
+
+	m_useMyHostname = useMyHostname;
+}
+
+
+size_t parsingContext::getMaxNestingDepth() const {
+
+	return m_maxNestingDepth;
+}
+
+
+void parsingContext::setMaxNestingDepth(const size_t maxDepth) {
+
+	m_maxNestingDepth = maxDepth;
 }
 
 

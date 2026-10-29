@@ -956,7 +956,6 @@ public:
 		bool parseImpl(IMAPParser& parser, string& line, size_t* currentPos) {
 
 			size_t pos = *currentPos;
-			size_t len = 0;
 			bool valid = false;
 
 			value.reserve(line.length() - pos);
@@ -977,7 +976,6 @@ public:
 					quoted = false;
 
 					++pos;
-					++len;
 
 				} else {
 
@@ -986,20 +984,19 @@ public:
 						quoted = true;
 
 						++pos;
-						++len;
 
 					} else if (c == '"') {
 
 						valid = true;
 						end = true;
 
-					} else if (c >= 0x01 && c <= 0x7f &&  // CHAR
-					           c != 0x0a && c != 0x0d) {  // CR and LF
+					} else if ((c >= 0x01 && c <= 0x7f &&  // CHAR
+					            c != 0x0a && c != 0x0d) ||  // CR and LF
+					           (!parser.isStrict() && c >= 0x80)) {  // 8-bit (eg. raw UTF-8) in non-strict mode
 
 						value += c;
 
 						++pos;
-						++len;
 
 					} else {
 
@@ -2267,6 +2264,79 @@ public:
 
 
 		std::vector <std::unique_ptr <capability>> capabilities;
+	};
+
+
+	//
+	// id_param        ::= string SPACE nstring
+	//                     ;; field/value pair (not named in RFC 2971)
+	//
+
+	DECLARE_COMPONENT(id_param)
+
+		bool parseImpl(IMAPParser& parser, string& line, size_t* currentPos) {
+
+			size_t pos = *currentPos;
+
+			VIMAP_PARSER_GET(xstring, field);
+			VIMAP_PARSER_CHECK(SPACE);
+			VIMAP_PARSER_GET(nstring, value);
+
+			DEBUG_FOUND("id_param", "<" << field->value << ", " << value->value << ">");
+
+			*currentPos = pos;
+
+			return true;
+		}
+
+
+		std::unique_ptr <xstring> field;
+		std::unique_ptr <nstring> value;
+	};
+
+
+	//
+	// id_response     ::= "ID" SPACE id_params_list
+	//
+	// id_params_list  ::= "(" #(string SPACE nstring) ")" / nil
+	//                     ;; list of field value pairs
+	//
+	// (RFC 2971)
+	//
+
+	DECLARE_COMPONENT(id_response)
+
+		bool parseImpl(IMAPParser& parser, string& line, size_t* currentPos) {
+
+			size_t pos = *currentPos;
+
+			VIMAP_PARSER_CHECK_WITHARG(special_atom, "id");
+			VIMAP_PARSER_CHECK(SPACE);
+
+			if (VIMAP_PARSER_TRY_CHECK(one_char <'('> )) {
+
+				if (!VIMAP_PARSER_TRY_CHECK(one_char <')'> )) {
+
+					VIMAP_PARSER_GET_PUSHBACK(id_param, params);
+
+					while (!VIMAP_PARSER_TRY_CHECK(one_char <')'> )) {
+						VIMAP_PARSER_CHECK(SPACE);
+						VIMAP_PARSER_GET_PUSHBACK(id_param, params);
+					}
+				}
+
+			} else {
+
+				VIMAP_PARSER_CHECK(NIL);
+			}
+
+			*currentPos = pos;
+
+			return true;
+		}
+
+
+		std::vector <std::unique_ptr <id_param>> params;
 	};
 
 
@@ -3712,7 +3782,7 @@ public:
 
 			VIMAP_PARSER_CHECK(one_char <'('> );
 
-			items.push_back(std::move(std::unique_ptr <msg_att_item>(parser.get <msg_att_item>(line, &pos))));
+			items.push_back(std::unique_ptr <msg_att_item>(parser.get <msg_att_item>(line, &pos)));
 
 			while (!VIMAP_PARSER_TRY_CHECK(one_char <')'> )) {
 				VIMAP_PARSER_CHECK(SPACE);
@@ -4321,7 +4391,8 @@ public:
 
 	//
 	// response_data  ::= "*" SPACE (resp_cond_state / resp_cond_bye /
-	//                    mailbox_data / message_data / capability_data) CRLF
+	//                    mailbox_data / message_data / capability_data /
+	//                    id_response) CRLF
 	//
 
 	DECLARE_COMPONENT(response_data)
@@ -4337,7 +4408,9 @@ public:
 				if (!VIMAP_PARSER_TRY_GET(IMAPParser::resp_cond_bye, resp_cond_bye)) {
 					if (!VIMAP_PARSER_TRY_GET(IMAPParser::mailbox_data, mailbox_data)) {
 						if (!VIMAP_PARSER_TRY_GET(IMAPParser::message_data, message_data)) {
-							VIMAP_PARSER_GET(IMAPParser::capability_data, capability_data);
+							if (!VIMAP_PARSER_TRY_GET(IMAPParser::capability_data, capability_data)) {
+								VIMAP_PARSER_GET(IMAPParser::id_response, id_response);
+							}
 						}
 					}
 				}
@@ -4364,6 +4437,7 @@ public:
 		std::unique_ptr <IMAPParser::mailbox_data> mailbox_data;
 		std::unique_ptr <IMAPParser::message_data> message_data;
 		std::unique_ptr <IMAPParser::capability_data> capability_data;
+		std::unique_ptr <IMAPParser::id_response> id_response;
 	};
 
 
@@ -4501,9 +4575,7 @@ public:
 			while ((resp = parser.get <IMAPParser::continue_req_or_response_data>(curLine, &pos))) {
 
 				continue_req_or_response_data.push_back(
-					std::move(
-						std::unique_ptr <IMAPParser::continue_req_or_response_data>(resp)
-					)
+					std::unique_ptr <IMAPParser::continue_req_or_response_data>(resp)
 				);
 
 				// Partial response (continue_req)
@@ -4695,8 +4767,7 @@ public:
 	template <class TYPE>
 	TYPE* get(string& line, size_t* currentPos) {
 
-		component* resp = new TYPE;
-		return internalGet <TYPE>(resp, line, currentPos);
+		return internalGet <TYPE>(std::unique_ptr <TYPE>(new TYPE), line, currentPos);
 	}
 
 	/** Parse a token which takes 2 arguments and advance.
@@ -4716,14 +4787,13 @@ public:
 	template <class TYPE, class ARG1_TYPE, class ARG2_TYPE>
 	TYPE* getWithArgs(string& line, size_t* currentPos, ARG1_TYPE arg1, ARG2_TYPE arg2) {
 
-		component* resp = new TYPE(arg1, arg2);
-		return internalGet <TYPE>(resp, line, currentPos);
+		return internalGet <TYPE>(std::unique_ptr <TYPE>(new TYPE(arg1, arg2)), line, currentPos);
 	}
 
 private:
 
 	template <class TYPE>
-	TYPE* internalGet(component* resp, string& line, size_t* currentPos) {
+	TYPE* internalGet(std::unique_ptr <TYPE> resp, string& line, size_t* currentPos) {
 
 		const size_t oldPos = *currentPos;
 
@@ -4731,12 +4801,10 @@ private:
 
 			*currentPos = oldPos;
 
-			delete resp;
-
 			return NULL;
 		}
 
-		return static_cast <TYPE*>(resp);
+		return resp.release();
 	}
 
 	const string lastLine() const {

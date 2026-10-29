@@ -67,7 +67,7 @@ text::~text() {
 
 
 void text::parseImpl(
-	const parsingContext& ctx,
+	parsingContext& ctx,
 	const string& buffer,
 	const size_t position,
 	const size_t end,
@@ -269,7 +269,7 @@ shared_ptr <text> text::newFromString(const string& in, const charset& ch) {
 
 void text::createFromString(const string& in, const charset& ch) {
 
-	size_t asciiPercent = 0;
+	double asciiPercent = 0;
 
 	removeAllWords();
 
@@ -282,87 +282,54 @@ void text::createFromString(const string& in, const charset& ch) {
 
 	if (!alwaysEncode) {
 		const auto asciiCount = utility::stringUtils::countASCIIchars(in.begin(), in.end());
-		asciiPercent = (in.length() == 0 ? 100 : (100 * asciiCount) / in.length());
+		asciiPercent = in.length() == 0 ? 1 : static_cast<double>(asciiCount) / static_cast<double>(in.length());
 	}
 
-	// If there are "too much" non-ASCII chars, encode everything
-	if (alwaysEncode || asciiPercent < 60) {  // less than 60% ASCII chars
+	// Cf. wordEncoder::guessBestEncoding for details
+
+	if (alwaysEncode || asciiPercent < 0.60) {  // less than 60% ASCII chars
 
 		appendWord(make_shared <word>(in, ch));
+		return;
+
+	}
 
 	// Else, only encode words which need it
-	} else {
 
-		bool is8bit = false;     // is the current word 8-bit?
-		bool prevIs8bit = false; // is previous word 8-bit?
-		unsigned int count = 0;  // total number of words
+	size_t end = in.size(), pos = 0;
+	bool is8bit = false;     // is the current word 8-bit?
+	bool prevIs8bit = false; // is previous word 8-bit?
+	unsigned int count = 0;  // total number of words
 
-		for (size_t end = in.size(), pos = 0, start = 0 ; ; ) {
+	do {
+		size_t start = pos;
 
-			if (pos == end || parserHelpers::isSpace(in[pos])) {
+		for (; parserHelpers::isSpace(in[pos]); )
+			++pos;
 
-				const string chunk(in.begin() + start, in.begin() + pos);
+		for (; pos < end && !parserHelpers::isSpace(in[pos]); ++pos)
+			is8bit |= !parserHelpers::isAscii(in[pos]);
 
-				if (pos != end) {
-					++pos;
-				}
+		// All chunks will have whitespace (if any) at front, never at the end
+		const string chunk(in.begin() + start, in.begin() + pos);
 
-				if (is8bit) {
+		if (prevIs8bit == is8bit && count > 0) {
 
-					if (count && prevIs8bit) {
+			// same bitness as previous word; merge
+			auto w = getWordAt(getWordCount() - 1);
+			w->getBuffer() += chunk;
 
-						// No need to create a new encoded word, just append
-						// the current word to the previous one.
-						shared_ptr <word> w = getWordAt(getWordCount() - 1);
-						w->getBuffer() += " " + chunk;
+		} else {
 
-					} else {
+			appendWord(make_shared <word>(chunk, charset(is8bit ? ch : charsets::US_ASCII)));
+			++count;
 
-						if (count) {
-							shared_ptr <word> w = getWordAt(getWordCount() - 1);
-							w->getBuffer() += ' ';
-						}
-
-						appendWord(make_shared <word>(chunk, ch));
-
-						prevIs8bit = true;
-						++count;
-					}
-
-				} else {
-
-					if (count && !prevIs8bit) {
-
-						shared_ptr <word> w = getWordAt(getWordCount() - 1);
-						w->getBuffer() += " " + chunk;
-
-					} else {
-
-						appendWord(make_shared <word>(chunk, charset(charsets::US_ASCII)));
-
-						prevIs8bit = false;
-						++count;
-					}
-				}
-
-				if (pos == end) {
-					break;
-				}
-
-				is8bit = false;
-				start = pos;
-
-			} else if (!parserHelpers::isAscii(in[pos])) {
-
-				is8bit = true;
-				++pos;
-
-			} else {
-
-				++pos;
-			}
 		}
-	}
+
+		prevIs8bit = is8bit;
+		is8bit = false;
+
+	} while (pos < end);
 }
 
 
@@ -401,7 +368,7 @@ shared_ptr <text> text::decodeAndUnfold(const string& in) {
 }
 
 
-shared_ptr <text> text::decodeAndUnfold(const parsingContext& ctx, const string& in) {
+shared_ptr <text> text::decodeAndUnfold(parsingContext& ctx, const string& in) {
 
 	shared_ptr <text> t = make_shared <text>();
 
@@ -417,7 +384,7 @@ text* text::decodeAndUnfold(const string& in, text* generateInExisting) {
 }
 
 
-text* text::decodeAndUnfold(const parsingContext& ctx, const string& in, text* generateInExisting) {
+text* text::decodeAndUnfold(parsingContext& ctx, const string& in, text* generateInExisting) {
 
 	text* out = generateInExisting ? generateInExisting : new text();
 

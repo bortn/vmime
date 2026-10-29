@@ -36,6 +36,7 @@ VMIME_TEST_SUITE_BEGIN(charsetTest)
 		VMIME_TEST(testConvertStreamValid)
 		VMIME_TEST(testConvertStreamExtract)
 		VMIME_TEST(testEncodingHebrew1255)
+		//VMIME_TEST(testEncodingSelectionOnASCII)
 
 		// IDNA
 		VMIME_TEST(testEncodeIDNA)
@@ -122,9 +123,15 @@ VMIME_TEST_SUITE_BEGIN(charsetTest)
 		auto filteredStream = conv->getFilteredOutputStream(outStr);
 		p.getBody()->getContents()->extract(*filteredStream);
 		filteredStream->flush();
+
+		// Result should be in the form "Foo ??\r\n? bar\r\nbaz" (ICU) or
+		// "Foo ????\r\n?? bar\r\nbaz" (iconv, one '?' per byte)...
+		// Remove consecutive question marks for easier matching.
+		str.erase(std::unique(str.begin(), str.end(), [](char a, char b) { return a == '?' && b == '?'; }), str.end());
+
 		VASSERT_EQ(
 			"generate",
-			"Foo ??\r\n"
+			"Foo ?\r\n"
 			"? bar\r\n"
 			"baz",
 			str
@@ -140,6 +147,16 @@ VMIME_TEST_SUITE_BEGIN(charsetTest)
 		// less than 60% ascii, base64 received
 		VASSERT_EQ("1", "=?windows-1255?B?6fn3+On5+Pfp6fk=?=", encoded);
 	}
+
+#if 0 /* decideImpl is not public */
+	void testEncodingSelectionOnASCII() {
+
+		const std::string a = "Hi\x01!", b = "Hi\x7f!";
+		VASSERT_EQ("1", vmime::encoding::decideImpl(std::begin(a), std::end(a)),
+		                vmime::encoding::decideImpl(std::begin(b), std::end(b)));
+
+	}
+#endif
 
 	static const vmime::string convertHelper(
 		const vmime::string& in,
@@ -202,7 +219,7 @@ VMIME_TEST_SUITE_BEGIN(charsetTest)
 
 		// Result should be in the form "a???b?c??d" or "a??????b?c??d"...
 		// Remove consecutive question marks for easier matching.
-		res.erase(std::unique(res.begin(), res.end()), res.end());
+		res.erase(std::unique(res.begin(), res.end(), [](char a, char b) { return a == '?' && b == '?'; }), res.end());
 
 		VASSERT_EQ(
 			"Illegal UTF-8 sequence",

@@ -23,15 +23,13 @@
 
 #include "tests/testUtils.hpp"
 
-#include <locale>
-#include <clocale>
-
 
 VMIME_TEST_SUITE_BEGIN(textTest)
 
 	VMIME_TEST_LIST_BEGIN
 		VMIME_TEST(testConstructors)
 		VMIME_TEST(testCopy)
+		VMIME_TEST(testRecommendedEncoding)
 		VMIME_TEST(testNewFromString)
 		VMIME_TEST(testDisplayForm)
 		VMIME_TEST(testParse)
@@ -87,24 +85,6 @@ VMIME_TEST_SUITE_BEGIN(textTest)
 	}
 
 
-	void setUp() {
-
-		// Set the global C and C++ locale to the user-configured locale.
-		// The locale should use UTF-8 encoding for these tests to run successfully.
-		try {
-			std::locale::global(std::locale(""));
-		} catch (std::exception &) {
-			std::setlocale(LC_ALL, "");
-		}
-	}
-
-	void tearDown() {
-
-		// Restore default locale
-		std::locale::global(std::locale("C"));
-	}
-
-
 	void testConstructors() {
 
 		vmime::text t1;
@@ -155,6 +135,17 @@ VMIME_TEST_SUITE_BEGIN(textTest)
 		VASSERT("copyFrom", t1 == t2);
 	}
 
+	void testRecommendedEncoding() {
+
+		vmime::encoding enc;
+		VASSERT_TRUE("1.1", vmime::charset("iso8859-1").getRecommendedEncoding(enc));
+		VASSERT_TRUE("1.2", enc.getName() == vmime::encodingTypes::QUOTED_PRINTABLE);
+		VASSERT_TRUE("1.2", vmime::charset("iso8859-2").getRecommendedEncoding(enc));
+		VASSERT_TRUE("1.3", enc.getName() == vmime::encodingTypes::QUOTED_PRINTABLE);
+		VASSERT_FALSE("1.3", vmime::charset(vmime::charsets::UTF_8).getRecommendedEncoding(enc));
+
+	}
+
 	void testNewFromString() {
 
 		vmime::string s1 = "only ASCII characters";
@@ -168,7 +159,7 @@ VMIME_TEST_SUITE_BEGIN(textTest)
 		VASSERT_EQ("1.3", vmime::charset(vmime::charsets::US_ASCII), t1.getWordAt(0)->getCharset());
 
 		vmime::string s2_1 = "some ASCII characters and special chars: ";
-		vmime::string s2_2 = "\xf1\xf2\xf3\xf4 ";
+		vmime::string s2_2 = "\xc3\xa4\xd0\xb0 ";
 		vmime::string s2_3 = "and then more ASCII chars.";
 		vmime::string s2 = s2_1 + s2_2 + s2_3;
 		vmime::charset c2("test");
@@ -177,11 +168,11 @@ VMIME_TEST_SUITE_BEGIN(textTest)
 		t2.createFromString(s2, c2);
 
 		VASSERT_EQ("2.1", 3, t2.getWordCount());
-		VASSERT_EQ("2.2", "some ASCII characters and special chars: ", t2.getWordAt(0)->getBuffer());
+		VASSERT_EQ("2.2", "some ASCII characters and special chars:", t2.getWordAt(0)->getBuffer());
 		VASSERT_EQ("2.3", vmime::charset(vmime::charsets::US_ASCII), t2.getWordAt(0)->getCharset());
-		VASSERT_EQ("2.4", "\xf1\xf2\xf3\xf4", t2.getWordAt(1)->getBuffer());
+		VASSERT_EQ("2.4", " \xc3\xa4\xd0\xb0", t2.getWordAt(1)->getBuffer());
 		VASSERT_EQ("2.5", c2, t2.getWordAt(1)->getCharset());
-		VASSERT_EQ("2.6", "and then more ASCII chars.", t2.getWordAt(2)->getBuffer());
+		VASSERT_EQ("2.6", " and then more ASCII chars.", t2.getWordAt(2)->getBuffer());
 		VASSERT_EQ("2.7", vmime::charset(vmime::charsets::US_ASCII), t2.getWordAt(2)->getCharset());
 	}
 
@@ -462,7 +453,12 @@ VMIME_TEST_SUITE_BEGIN(textTest)
 		vmime::word("Non-quotable text \xc3\xa9")
 			.generate(ctx, os, 0, NULL, vmime::text::QUOTE_IF_POSSIBLE, NULL);
 
-		VASSERT_EQ("3", "=?UTF-8?Q?Non-quotable_text_=C3=A9?=", cleanGeneratedWords(str));
+		// Local charset name may be "UTF-8" or "utf-8", depending on the platform
+		VASSERT_EQ(
+			"3",
+			"=?" + vmime::charset::getLocalCharset().getName() + "?Q?Non-quotable_text_=C3=A9?=",
+			cleanGeneratedWords(str)
+		);
 	}
 
 	void testWordGenerateSpecialCharsets() {
@@ -500,9 +496,9 @@ VMIME_TEST_SUITE_BEGIN(textTest)
 		text.createFromString("Achim Br\xc3\xa4ndt", vmime::charsets::UTF_8);
 
 		VASSERT_EQ("1", 2, text.getWordCount());
-		VASSERT_EQ("2", "Achim ", text.getWordAt(0)->getBuffer());
+		VASSERT_EQ("2", "Achim", text.getWordAt(0)->getBuffer());
 		VASSERT_EQ("3", "us-ascii", text.getWordAt(0)->getCharset());
-		VASSERT_EQ("4", "Br\xc3\xa4ndt", text.getWordAt(1)->getBuffer());
+		VASSERT_EQ("4", " Br\xc3\xa4ndt", text.getWordAt(1)->getBuffer());
 		VASSERT_EQ("5", "utf-8", text.getWordAt(1)->getCharset());
 
 		// Generate
@@ -522,7 +518,7 @@ VMIME_TEST_SUITE_BEGIN(textTest)
 
 		// Space MUST be encoded inside a word
 		vmime::mailbox mbox(vmime::text("Achim Br\xc3\xa4ndt", vmime::charsets::UTF_8), "me@vmime.org");
-		VASSERT_EQ("generate1", "=?us-ascii?Q?Achim_?= =?utf-8?Q?Br=C3=A4ndt?= <me@vmime.org>", mbox.generate());
+		VASSERT_EQ("generate1", "=?us-ascii?Q?Achim?= =?utf-8?Q?_Br=C3=A4ndt?= <me@vmime.org>", mbox.generate());
 
 		vmime::text txt;
 		txt.appendWord(vmime::make_shared <vmime::word>("Achim ", "us-ascii"));

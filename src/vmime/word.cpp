@@ -77,8 +77,22 @@ word::word(const string& buffer, const charset& charset, const string& lang)
 }
 
 
+// static
+charset word::unencodedCharset(const parsingContext& ctx, const string& buffer) {
+
+	// Plain ASCII stays US-ASCII, so that it does not get encoded on output
+	if (ctx.getInternationalizedEmailSupport() &&
+	    utility::stringUtils::findFirstNonASCIIchar(buffer.begin(), buffer.end()) != string::npos) {
+
+		return charset(charsets::UTF_8);
+	}
+
+	return charset(charsets::US_ASCII);
+}
+
+
 shared_ptr <word> word::parseNext(
-	const parsingContext& ctx,
+	parsingContext& ctx,
 	const string& buffer,
 	const size_t position,
 	const size_t end,
@@ -106,9 +120,6 @@ shared_ptr <word> word::parseNext(
 
 	size_t startPos = pos;
 	string unencoded;
-
-	const charset defaultCharset = ctx.getInternationalizedEmailSupport()
-		? charset(charsets::UTF_8) : charset(charsets::US_ASCII);
 
 	while (pos < end) {
 
@@ -149,7 +160,7 @@ shared_ptr <word> word::parseNext(
 					unencoded = whiteSpaces + unencoded;
 				}
 
-				shared_ptr <word> w = make_shared <word>(unencoded, defaultCharset);
+				shared_ptr <word> w = make_shared <word>(unencoded, unencodedCharset(ctx, unencoded));
 				w->setParsedBounds(position, pos);
 
 				if (newPosition) {
@@ -237,7 +248,7 @@ shared_ptr <word> word::parseNext(
 	// Treat unencoded text at the end of the buffer
 	if (!unencoded.empty()) {
 
-		shared_ptr <word> w = make_shared <word>(unencoded, defaultCharset);
+		shared_ptr <word> w = make_shared <word>(unencoded, unencodedCharset(ctx, unencoded));
 		w->setParsedBounds(position, end);
 
 		if (newPosition) {
@@ -255,7 +266,7 @@ shared_ptr <word> word::parseNext(
 
 
 const std::vector <shared_ptr <word> > word::parseMultiple(
-	const parsingContext& ctx,
+	parsingContext& ctx,
 	const string& buffer,
 	const size_t position,
 	const size_t end,
@@ -282,7 +293,7 @@ const std::vector <shared_ptr <word> > word::parseMultiple(
 
 
 void word::parseImpl(
-	const parsingContext& ctx,
+	parsingContext& ctx,
 	const string& buffer,
 	const size_t position,
 	const size_t end,
@@ -294,7 +305,7 @@ void word::parseImpl(
 
 
 void word::parseWithState(
-	const parsingContext& ctx,
+	parsingContext& ctx,
 	const string& buffer,
 	const size_t position,
 	const size_t end,
@@ -410,8 +421,7 @@ void word::parseWithState(
 
 	// Unknown encoding or malformed encoded word: treat the buffer as ordinary text (RFC-2047, Page 9).
 	m_buffer = string(buffer.begin() + position, buffer.begin() + end);
-	m_charset = ctx.getInternationalizedEmailSupport()
-		? charset(charsets::UTF_8) : charset(charsets::US_ASCII);
+	m_charset = unencodedCharset(ctx, m_buffer);
 
 	setParsedBounds(position, end);
 
@@ -755,6 +765,9 @@ void word::generate(
 		if (!startNewLine && !state->isFirstWord && !state->lastCharIsSpace) {
 
 			os << " "; // Separate from previous word
+			if (!state->prevWordIsEncoded && m_buffer[0] == ' ')
+				wordEnc.getNextChunk(1);
+
 			++curLineLength;
 
 			state->lastCharIsSpace = true;

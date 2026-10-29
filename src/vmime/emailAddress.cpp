@@ -176,7 +176,7 @@ emailAddress::emailAddress(const word& localName, const word& domainName)
 
 
 void emailAddress::parseImpl(
-	const parsingContext& /* ctx */,
+	parsingContext& ctx,
 	const string& buffer,
 	const size_t position,
 	const size_t end,
@@ -541,7 +541,7 @@ void emailAddress::parseImpl(
 	} else {
 
 		// If the domain part is missing, use local host name
-		if (domainPart.str().empty() && !atFound) {
+		if (ctx.getUseMyHostname() && domainPart.str().empty() && !atFound) {
 			domainPart << platform::getHandler()->getHostName();
 		}
 
@@ -595,12 +595,12 @@ void emailAddress::generateImpl(
 		domainPart = domainNameToIDNA(m_domainName.getConvertedText(vmime::charsets::UTF_8));
 	}
 
+
 	os << localPart
-	   << "@"
-	   << domainPart;
+		<< "@"
+		<< domainPart;
 
 	if (newLinePos) {
-
 		*newLinePos = curLinePos
 			+ localPart.length()
 			+ 1 // @

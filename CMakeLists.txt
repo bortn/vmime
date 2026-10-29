@@ -12,7 +12,7 @@
 # http://www.cmake.org
 #
 
-CMAKE_MINIMUM_REQUIRED(VERSION 3.1 FATAL_ERROR)
+CMAKE_MINIMUM_REQUIRED(VERSION 3.12 FATAL_ERROR)
 
 INCLUDE(cmake/Utils.cmake)
 
@@ -99,6 +99,29 @@ SET(CMAKE_CXX_STANDARD 11)
 SET(CMAKE_CXX_STANDARD_REQUIRED ON)
 SET(CMAKE_CXX_EXTENSIONS OFF)
 
+# Unlike on GNU/Linux, g++ does not predefine _GNU_SOURCE on Cygwin, so
+# POSIX declarations are hidden in strict mode (CMAKE_CXX_EXTENSIONS OFF)
+IF(CYGWIN)
+	ADD_DEFINITIONS(-D_GNU_SOURCE)
+ENDIF()
+
+##############################################################################
+# Charset conversion library (1/2)
+
+INCLUDE(cmake/FindIconv.cmake)
+INCLUDE(cmake/FindICU.cmake)
+
+FIND_PACKAGE(ICU QUIET)
+
+IF(ICU_LIBRARIES)
+	SET(VMIME_CHARSETCONV_LIB_DETECTED "icu")
+	SET(CMAKE_CXX_STANDARD 17)
+ELSEIF(ICONV_FOUND)
+	SET(VMIME_CHARSETCONV_LIB_DETECTED "iconv")
+ELSEIF(WIN32)
+	SET(VMIME_CHARSETCONV_LIB_DETECTED "win")
+ENDIF()
+
 # Source files
 FILE(
 	GLOB_RECURSE
@@ -112,13 +135,10 @@ FILE(
 	${CMAKE_CURRENT_SOURCE_DIR}/src/vmime/*.hpp
 )
 
-LIST(APPEND VMIME_LIBRARY_GENERATED_INCLUDE_FILES "${CMAKE_BINARY_DIR}/src/vmime/config.hpp")
-
 INCLUDE_DIRECTORIES(
 	${CMAKE_CURRENT_SOURCE_DIR}          # for "contrib/"
 	${CMAKE_CURRENT_SOURCE_DIR}/src      # for "vmime/
-	${CMAKE_BINARY_DIR}/src              # for "config.hpp"
-	${CMAKE_BINARY_DIR}/src/vmime        # for "config.hpp"
+	${CMAKE_CURRENT_BINARY_DIR}/src      # for "config.hpp" and other generated sources
 )
 
 INCLUDE(GenerateExportHeader)
@@ -141,24 +161,19 @@ IF(VMIME_BUILD_SHARED_LIBRARY)
 	)
 
 	TARGET_INCLUDE_DIRECTORIES(${VMIME_LIBRARY_NAME} PUBLIC
-  		$<INSTALL_INTERFACE:include>
+		$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+		$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/src>
+		$<INSTALL_INTERFACE:include>
 	)
 
 	GENERATE_EXPORT_HEADER(
 		${VMIME_LIBRARY_NAME}
 		BASE_NAME VMIME
 		STATIC_DEFINE VMIME_STATIC
-		EXPORT_FILE_NAME export-shared.hpp
+		EXPORT_FILE_NAME ${CMAKE_CURRENT_BINARY_DIR}/src/vmime/export-shared.hpp
 	)
 
-	FILE(
-		COPY
-		${CMAKE_CURRENT_BINARY_DIR}/export-shared.hpp
-		DESTINATION
-		${CMAKE_BINARY_DIR}/src/vmime
-	)
-
-	LIST(APPEND VMIME_LIBRARY_GENERATED_INCLUDE_FILES "${CMAKE_BINARY_DIR}/src/vmime/export-shared.hpp")
+	LIST(APPEND VMIME_LIBRARY_GENERATED_INCLUDE_FILES "${CMAKE_CURRENT_BINARY_DIR}/src/vmime/export-shared.hpp")
 
 	SET_TARGET_PROPERTIES(
 		${VMIME_LIBRARY_NAME}
@@ -189,25 +204,20 @@ IF(VMIME_BUILD_STATIC_LIBRARY)
 		${VMIME_LIBRARY_INCLUDE_FILES}
 	)
 
- 	TARGET_INCLUDE_DIRECTORIES(${VMIME_LIBRARY_NAME}-static PUBLIC
-  		$<INSTALL_INTERFACE:include>
+	TARGET_INCLUDE_DIRECTORIES(${VMIME_LIBRARY_NAME}-static PUBLIC
+		$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+		$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/src>
+		$<INSTALL_INTERFACE:include>
 	)
 
 	GENERATE_EXPORT_HEADER(
 		${VMIME_LIBRARY_NAME}-static
 		BASE_NAME VMIME
 		STATIC_DEFINE VMIME_STATIC
-		EXPORT_FILE_NAME export-static.hpp
+		EXPORT_FILE_NAME ${CMAKE_CURRENT_BINARY_DIR}/src/vmime/export-static.hpp
 	)
 
-	FILE(
-		COPY
-		${CMAKE_CURRENT_BINARY_DIR}/export-static.hpp
-		DESTINATION
-		${CMAKE_BINARY_DIR}/src/vmime
-	)
-
-	LIST(APPEND VMIME_LIBRARY_GENERATED_INCLUDE_FILES "${CMAKE_BINARY_DIR}/src/vmime/export-static.hpp")
+	LIST(APPEND VMIME_LIBRARY_GENERATED_INCLUDE_FILES "${CMAKE_CURRENT_BINARY_DIR}/src/vmime/export-static.hpp")
 
 	SET_TARGET_PROPERTIES(
 		${VMIME_LIBRARY_NAME}-static
@@ -222,49 +232,6 @@ ENDIF()
 IF(NOT(VMIME_BUILD_SHARED_LIBRARY OR VMIME_BUILD_STATIC_LIBRARY))
 	MESSAGE(FATAL_ERROR "You should select at least one library to build (either VMIME_BUILD_SHARED_LIBRARY or VMIME_BUILD_STATIC_LIBRARY must be set to YES.")
 ENDIF()
-
-# These next two lines are required but it is unclear exactly what they do.
-# The CMake FAQ mentions they are necessary and it does not work otherwise.
-IF(VMIME_BUILD_SHARED_LIBRARY)
-	SET_TARGET_PROPERTIES(${VMIME_LIBRARY_NAME} PROPERTIES CLEAN_DIRECT_OUTPUT 1)
-ENDIF()
-IF(VMIME_BUILD_STATIC_LIBRARY)
-	SET_TARGET_PROPERTIES(${VMIME_LIBRARY_NAME}-static PROPERTIES CLEAN_DIRECT_OUTPUT 1)
-ENDIF()
-
-# Installation of libraries
-IF(VMIME_BUILD_SHARED_LIBRARY)
-	INSTALL(
-		TARGETS ${VMIME_LIBRARY_NAME}
-		EXPORT ${VMIME_LIBRARY_NAME}-config
-		LIBRARY DESTINATION "${VMIME_INSTALL_LIBDIR}"
-		PUBLIC_HEADER DESTINATION "${VMIME_INSTALL_INCLUDEDIR}"
-		COMPONENT sharedlibs
-	)
-	INSTALL(
-		EXPORT ${VMIME_LIBRARY_NAME}-config
-		DESTINATION "${VMIME_INSTALL_LIBDIR}/cmake/vmime"
-	)
-ENDIF()
-
-IF(VMIME_BUILD_STATIC_LIBRARY)
-	INSTALL(
-		TARGETS ${VMIME_LIBRARY_NAME}-static
-		EXPORT ${VMIME_LIBRARY_NAME}-static-config
-		ARCHIVE DESTINATION "${VMIME_INSTALL_LIBDIR}"
-		PUBLIC_HEADER DESTINATION "${VMIME_INSTALL_INCLUDEDIR}"
-		COMPONENT staticlibs
-	)
-	INSTALL(
-		EXPORT ${VMIME_LIBRARY_NAME}-static-config
-		DESTINATION "${VMIME_INSTALL_LIBDIR}/cmake/vmime"
-	)
-ENDIF()
-
-# Installation of header files
-INSTALL_HEADERS_WITH_DIRECTORY(VMIME_LIBRARY_INCLUDE_FILES headers "${CMAKE_CURRENT_SOURCE_DIR}/src/")
-INSTALL_HEADERS_WITH_DIRECTORY(VMIME_LIBRARY_GENERATED_INCLUDE_FILES headers "${CMAKE_BINARY_DIR}/src")
-
 
 ##############################################################################
 # Tests
@@ -293,6 +260,26 @@ IF(VMIME_BUILD_TESTS)
 		${CMAKE_CURRENT_SOURCE_DIR}/tests/testRunner.cpp ${CMAKE_CURRENT_SOURCE_DIR}/tests/testUtils.cpp
 	)
 
+	# Needed so that these libraries come after test-runner on the link
+	# command line, as required with import libraries (eg. on Cygwin)
+	TARGET_LINK_LIBRARIES(
+		test-runner
+		${VMIME_LIBRARY_NAME}
+		${CPPUNIT_LIBRARY}
+	)
+
+	# On Windows, embed a manifest in test executables to use UTF-8 as the
+	# ANSI code page, as some tests expect the local charset to be UTF-8
+	SET(VMIME_TESTS_RESOURCE_FILES "")
+
+	IF(MSVC)
+		# Merged by the linker with the manifest it generates
+		SET(VMIME_TESTS_RESOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/tests/utf8.manifest)
+	ELSEIF(MINGW)
+		# Replaces the default manifest added by the toolchain
+		SET(VMIME_TESTS_RESOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/tests/utf8.rc)
+	ENDIF()
+
 	# Build one file for each test
 	FOREACH(VMIME_TEST_SRC_FILE ${VMIME_TESTS_SRC_FILES})
 
@@ -307,6 +294,7 @@ IF(VMIME_BUILD_TESTS)
 		ADD_EXECUTABLE(
 			${VMIME_TEST_NAME}
 			${VMIME_TEST_SRC_FILE}
+			${VMIME_TESTS_RESOURCE_FILES}
 		)
 
 		TARGET_LINK_LIBRARIES(
@@ -331,6 +319,7 @@ IF(VMIME_BUILD_TESTS)
 	ADD_EXECUTABLE(
 		"run-tests"
 		${VMIME_TESTS_SRC_FILES}
+		${VMIME_TESTS_RESOURCE_FILES}
 	)
 
 	TARGET_LINK_LIBRARIES(
@@ -356,6 +345,10 @@ OPTION(
 	OFF
 )
 
+IF(VMIME_BUILD_SAMPLES)
+	ADD_SUBDIRECTORY(examples)
+ENDIF()
+
 
 ##############################################################################
 # Packaging / Distribution
@@ -380,10 +373,10 @@ SET(CPACK_PACKAGE_VERSION              "${VMIME_PACKAGE_VERSION}")
 IF(APPLE)
 	# CPack/PackageManager won't allow file without recognized extension
 	# to be used as license file.
-	CONFIGURE_FILE("${CMAKE_CURRENT_SOURCE_DIR}/COPYING" "${CMAKE_BINARY_DIR}/COPYING.txt" COPYONLY)
-	SET(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_BINARY_DIR}/COPYING.txt")
-	CONFIGURE_FILE("${CMAKE_CURRENT_SOURCE_DIR}/README" "${CMAKE_BINARY_DIR}/README.txt" COPYONLY)
-	SET(CPACK_RESOURCE_FILE_README "${CMAKE_BINARY_DIR}/README.txt")
+	CONFIGURE_FILE("${CMAKE_CURRENT_SOURCE_DIR}/COPYING" "${CMAKE_CURRENT_BINARY_DIR}/COPYING.txt" COPYONLY)
+	SET(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_BINARY_DIR}/COPYING.txt")
+	CONFIGURE_FILE("${CMAKE_CURRENT_SOURCE_DIR}/README" "${CMAKE_CURRENT_BINARY_DIR}/README.txt" COPYONLY)
+	SET(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_BINARY_DIR}/README.txt")
 ELSE()
 	SET(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/COPYING")
 	SET(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README")
@@ -419,7 +412,7 @@ SET(ARCHIVE_NAME ${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION})
 ADD_CUSTOM_TARGET(
 	dist
 	COMMAND git archive --prefix=${ARCHIVE_NAME}/ HEAD
-	| bzip2 > ${CMAKE_BINARY_DIR}/${ARCHIVE_NAME}.tar.bz2
+	| bzip2 > ${CMAKE_CURRENT_BINARY_DIR}/${ARCHIVE_NAME}.tar.bz2
 	WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
@@ -553,25 +546,6 @@ CHECK_TYPE_SIZE(size_t VMIME_HAVE_SIZE_T)
 
 
 ##############################################################################
-# Sendmail path
-
-FOREACH (SENDMAIL_PATH /usr/sbin/sendmail /usr/lib/sendmail /usr/bin/sendmail /bin/sendmail /var/qmail/bin/qmail-inject /bin/cgimail)
-	IF(EXISTS ${SENDMAIL_PATH})
-		MESSAGE(STATUS "Sendmail binary found at ${SENDMAIL_PATH}")
-		SET(VMIME_DEFAULT_SENDMAIL_PATH ${SENDMAIL_PATH})
-	ENDIF()
-ENDFOREACH(SENDMAIL_PATH)
-
-SET(
-	VMIME_SENDMAIL_PATH
-	${VMIME_DEFAULT_SENDMAIL_PATH}
-	CACHE
-	STRING
-	"Specifies the path to sendmail binary"
-)
-
-
-##############################################################################
 # Messaging features
 
 # Module
@@ -626,8 +600,6 @@ OPTION(
 ##############################################################################
 # SASL support
 
-INCLUDE(cmake/FindGSasl.cmake)
-
 OPTION(
 	VMIME_HAVE_SASL_SUPPORT
 	"Enable SASL support (requires GNU SASL library)"
@@ -635,6 +607,8 @@ OPTION(
 )
 
 IF(VMIME_HAVE_SASL_SUPPORT)
+
+	INCLUDE(cmake/FindGSasl.cmake)
 
 	INCLUDE_DIRECTORIES(
 		${INCLUDE_DIRECTORIES}
@@ -657,36 +631,37 @@ ENDIF()
 ##############################################################################
 # SSL/TLS support
 
-INCLUDE(FindGnuTLS)
-INCLUDE(FindOpenSSL)
-
-SET(CMAKE_REQUIRED_LIBRARIES "${GNUTLS_LIBRARY}")
-CHECK_FUNCTION_EXISTS(gnutls_priority_set_direct VMIME_HAVE_GNUTLS_PRIORITY_FUNCS)
-
-
 OPTION(
 	VMIME_HAVE_TLS_SUPPORT
 	"SSL/TLS support (requires either GNU TLS or OpenSSL library)"
 	ON
 )
 
-SET(
-	VMIME_TLS_SUPPORT_LIB
-	"gnutls"
-	CACHE
-	STRING
-	"Library to use for SSL/TLS conversion"
-)
-SET_PROPERTY(
-	CACHE
-	VMIME_TLS_SUPPORT_LIB
-	PROPERTY STRINGS gnutls openssl
-)
-
-
 IF(VMIME_HAVE_TLS_SUPPORT)
 
+	SET(
+		VMIME_TLS_SUPPORT_LIB
+		"gnutls"
+		CACHE
+		STRING
+		"Library to use for SSL/TLS conversion"
+	)
+	SET_PROPERTY(
+		CACHE
+		VMIME_TLS_SUPPORT_LIB
+		PROPERTY STRINGS gnutls openssl
+	)
+
 	IF(VMIME_TLS_SUPPORT_LIB STREQUAL "gnutls")
+
+		INCLUDE(FindGnuTLS)
+
+		IF(NOT GNUTLS_FOUND)
+			MESSAGE(FATAL_ERROR "GnuTLS was selected for TLS support, but it was not found")
+		ENDIF()
+
+		SET(CMAKE_REQUIRED_LIBRARIES "${GNUTLS_LIBRARY}")
+		CHECK_FUNCTION_EXISTS(gnutls_priority_set_direct VMIME_HAVE_GNUTLS_PRIORITY_FUNCS)
 
 		INCLUDE_DIRECTORIES(
 			${INCLUDE_DIRECTORIES}
@@ -713,6 +688,12 @@ IF(VMIME_HAVE_TLS_SUPPORT)
 
 	ELSEIF(VMIME_TLS_SUPPORT_LIB STREQUAL "openssl")
 
+		INCLUDE(FindOpenSSL)
+
+		IF(NOT OPENSSL_FOUND)
+			MESSAGE(FATAL_ERROR "OpenSSL was selected for TLS support, but it was not found")
+		ENDIF()
+
 		INCLUDE_DIRECTORIES(
 			${INCLUDE_DIRECTORIES}
 			${OPENSSL_INCLUDE_DIR}
@@ -737,24 +718,13 @@ IF(VMIME_HAVE_TLS_SUPPORT)
 
 	ENDIF()
 
+	MESSAGE(STATUS "TLS support library: ${VMIME_TLS_SUPPORT_LIB}")
+
 ENDIF(VMIME_HAVE_TLS_SUPPORT)
 
 
 ##############################################################################
-# Charset conversion library
-
-INCLUDE(cmake/FindIconv.cmake)
-INCLUDE(cmake/FindICU.cmake)
-
-FIND_PACKAGE(ICU QUIET)
-
-IF(ICU_LIBRARIES)
-	SET(VMIME_CHARSETCONV_LIB_DETECTED "icu")
-ELSEIF(ICONV_FOUND)
-	SET(VMIME_CHARSETCONV_LIB_DETECTED "iconv")
-ELSEIF(WIN32)
-	SET(VMIME_CHARSETCONV_LIB_DETECTED "win")
-ENDIF()
+# Charset conversion library (2/2)
 
 SET(
 	VMIME_CHARSETCONV_LIB
@@ -772,6 +742,10 @@ SET_PROPERTY(
 
 IF(VMIME_CHARSETCONV_LIB STREQUAL "iconv")
 
+	IF(NOT ICONV_FOUND)
+		MESSAGE(FATAL_ERROR "iconv was selected for charset conversion, but it was not found")
+	ENDIF()
+
 	INCLUDE_DIRECTORIES(
 		${INCLUDE_DIRECTORIES}
 		${ICONV_INCLUDE_DIR}
@@ -780,6 +754,14 @@ IF(VMIME_CHARSETCONV_LIB STREQUAL "iconv")
 	IF(VMIME_BUILD_SHARED_LIBRARY)
 		TARGET_LINK_LIBRARIES(
 			${VMIME_LIBRARY_NAME}
+			${TARGET_LINK_LIBRARIES}
+			${ICONV_LIBRARIES}
+		)
+	ENDIF()
+
+	IF(VMIME_BUILD_STATIC_LIBRARY)
+		TARGET_LINK_LIBRARIES(
+			${VMIME_LIBRARY_NAME}-static
 			${TARGET_LINK_LIBRARIES}
 			${ICONV_LIBRARIES}
 		)
@@ -794,6 +776,10 @@ IF(VMIME_CHARSETCONV_LIB STREQUAL "iconv")
 
 ELSEIF(VMIME_CHARSETCONV_LIB STREQUAL "icu")
 
+	IF(NOT ICU_LIBRARIES)
+		MESSAGE(FATAL_ERROR "ICU was selected for charset conversion, but it was not found")
+	ENDIF()
+
 	INCLUDE_DIRECTORIES(
 		${INCLUDE_DIRECTORIES}
 		${ICU_INCLUDE_DIRS}
@@ -802,6 +788,14 @@ ELSEIF(VMIME_CHARSETCONV_LIB STREQUAL "icu")
 	IF(VMIME_BUILD_SHARED_LIBRARY)
 		TARGET_LINK_LIBRARIES(
 			${VMIME_LIBRARY_NAME}
+			${TARGET_LINK_LIBRARIES}
+			${ICU_LIBRARIES}
+		)
+	ENDIF()
+
+	IF(VMIME_BUILD_STATIC_LIBRARY)
+		TARGET_LINK_LIBRARIES(
+			${VMIME_LIBRARY_NAME}-static
 			${TARGET_LINK_LIBRARIES}
 			${ICU_LIBRARIES}
 		)
@@ -829,6 +823,8 @@ ELSE()
 	MESSAGE(FATAL_ERROR "No charset conversion library was selected/found")
 
 ENDIF()
+
+MESSAGE(STATUS "Charset conversion library: ${VMIME_CHARSETCONV_LIB}")
 
 
 ##############################################################################
@@ -899,12 +895,13 @@ ENDIF()
 # POSIX-specific checks
 
 CHECK_FUNCTION_EXISTS(getaddrinfo VMIME_HAVE_GETADDRINFO)
-CHECK_FUNCTION_EXISTS(getnameinfo VMIME_HAVE_GETNAMEINFO)
 
 CHECK_FUNCTION_EXISTS(gettid VMIME_HAVE_GETTID)
 CHECK_FUNCTION_EXISTS(syscall VMIME_HAVE_SYSCALL)
 CHECK_SYMBOL_EXISTS(SYS_gettid sys/syscall.h VMIME_HAVE_SYSCALL_GETTID)
 CHECK_SYMBOL_EXISTS(getthrid unistd.h VMIME_HAVE_GETTHRID)
+CHECK_SYMBOL_EXISTS(thr_self sys/thr.h VMIME_HAVE_THR_SELF)
+CHECK_SYMBOL_EXISTS(_lwp_self sys/lwp.h VMIME_HAVE_LWP_SELF)
 
 CHECK_SYMBOL_EXISTS(SO_KEEPALIVE sys/socket.h VMIME_HAVE_SO_KEEPALIVE)
 CHECK_SYMBOL_EXISTS(SO_NOSIGPIPE sys/socket.h VMIME_HAVE_SO_NOSIGPIPE)
@@ -1004,13 +1001,13 @@ IF(VMIME_BUILD_DOCUMENTATION)
 	FIND_PACKAGE(Doxygen)
 
 	IF(DOXYGEN_FOUND)
-		CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile.in ${CMAKE_BINARY_DIR}/Doxyfile @ONLY)
+		CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile.in ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile @ONLY)
 
 		# Make a target so that documentation can be generated by running "make doc"
 		ADD_CUSTOM_TARGET(
 			doc
-			${DOXYGEN_EXECUTABLE} ${CMAKE_BINARY_DIR}/Doxyfile
-			WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+			${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile
+			WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 			COMMENT "Generating API documentation with Doxygen" VERBATIM
 		)
 	ENDIF(DOXYGEN_FOUND)
@@ -1031,32 +1028,84 @@ ENDIF()
 
 # Path to 'sendmail' must be specified if Sendmail protocol is enabled
 IF(VMIME_HAVE_MESSAGING_PROTO_SENDMAIL)
+	# Sendmail path
+	# only configure this if we are enabling sendmail
+
+	FOREACH (SENDMAIL_PATH /usr/sbin/sendmail /usr/lib/sendmail /usr/bin/sendmail /bin/sendmail /var/qmail/bin/qmail-inject /bin/cgimail)
+		IF(EXISTS ${SENDMAIL_PATH})
+			MESSAGE(STATUS "Sendmail binary found at ${SENDMAIL_PATH}")
+			SET(VMIME_DEFAULT_SENDMAIL_PATH ${SENDMAIL_PATH})
+		ENDIF()
+	ENDFOREACH(SENDMAIL_PATH)
+
+	SET(
+		VMIME_SENDMAIL_PATH
+		${VMIME_DEFAULT_SENDMAIL_PATH}
+		CACHE
+		STRING
+		"Specifies the path to sendmail binary"
+	)
+
 	IF(NOT VMIME_SENDMAIL_PATH OR VMIME_SENDMAIL_PATH STREQUAL "")
 		MESSAGE(FATAL_ERROR "Enabling Sendmail protocol requires that you specify path to 'sendmail' binary.")
 	ENDIF()
 ENDIF()
 
 
-##############################################################################
-# Build examples
-
-IF(VMIME_BUILD_SAMPLES)
-	ADD_SUBDIRECTORY(examples)
-ENDIF()
-
 
 # Set our configure file
-CONFIGURE_FILE(cmake/config.hpp.cmake ${CMAKE_BINARY_DIR}/src/vmime/config.hpp)
+CONFIGURE_FILE(cmake/config.hpp.cmake ${CMAKE_CURRENT_BINARY_DIR}/src/vmime/config.hpp)
+LIST(APPEND VMIME_LIBRARY_GENERATED_INCLUDE_FILES ${CMAKE_CURRENT_BINARY_DIR}/src/vmime/config.hpp)
 
 # PkgConfig post-configuration
-CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/vmime.pc.in ${CMAKE_BINARY_DIR}/vmime.pc @ONLY)
-INSTALL(FILES ${CMAKE_BINARY_DIR}/vmime.pc DESTINATION "${VMIME_INSTALL_LIBDIR}/pkgconfig" COMPONENT headers)
+CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/vmime.pc.in ${CMAKE_CURRENT_BINARY_DIR}/vmime.pc @ONLY)
 
 INCLUDE(CPack)
 
+# Installation of libraries
+OPTION(
+	VMIME_INSTALL
+	"Should the vmime library be installed"
+	ON
+)
+IF(VMIME_INSTALL)
+	IF(VMIME_BUILD_SHARED_LIBRARY)
+		INSTALL(
+			TARGETS ${VMIME_LIBRARY_NAME}
+			EXPORT ${VMIME_LIBRARY_NAME}-config
+			LIBRARY DESTINATION "${VMIME_INSTALL_LIBDIR}"
+			PUBLIC_HEADER DESTINATION "${VMIME_INSTALL_INCLUDEDIR}"
+			COMPONENT sharedlibs
+		)
+		INSTALL(
+			EXPORT ${VMIME_LIBRARY_NAME}-config
+			DESTINATION "${VMIME_INSTALL_LIBDIR}/cmake/vmime"
+		)
+	ENDIF()
 
-MESSAGE("")
-MESSAGE("VMime will install to the following directories:")
-MESSAGE("  libraries: ${VMIME_INSTALL_LIBDIR}")
-MESSAGE("  headers:   ${VMIME_INSTALL_INCLUDEDIR}")
-MESSAGE("")
+	IF(VMIME_BUILD_STATIC_LIBRARY)
+		INSTALL(
+			TARGETS ${VMIME_LIBRARY_NAME}-static
+			EXPORT ${VMIME_LIBRARY_NAME}-static-config
+			ARCHIVE DESTINATION "${VMIME_INSTALL_LIBDIR}"
+			PUBLIC_HEADER DESTINATION "${VMIME_INSTALL_INCLUDEDIR}"
+			COMPONENT staticlibs
+		)
+		INSTALL(
+			EXPORT ${VMIME_LIBRARY_NAME}-static-config
+			DESTINATION "${VMIME_INSTALL_LIBDIR}/cmake/vmime"
+		)
+	ENDIF()
+
+	# Installation of header files
+	INSTALL_HEADERS_WITH_DIRECTORY(VMIME_LIBRARY_INCLUDE_FILES headers "${CMAKE_CURRENT_SOURCE_DIR}/src/")
+	INSTALL_HEADERS_WITH_DIRECTORY(VMIME_LIBRARY_GENERATED_INCLUDE_FILES headers "${CMAKE_CURRENT_BINARY_DIR}/src")
+
+	INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/vmime.pc DESTINATION "${VMIME_INSTALL_LIBDIR}/pkgconfig" COMPONENT headers)
+
+	MESSAGE("")
+	MESSAGE("VMime will install to the following directories:")
+	MESSAGE("  libraries: ${VMIME_INSTALL_LIBDIR}")
+	MESSAGE("  headers:   ${VMIME_INSTALL_INCLUDEDIR}")
+	MESSAGE("")
+ENDIF(VMIME_INSTALL)
